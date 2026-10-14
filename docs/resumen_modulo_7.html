@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Módulo 7 · APIs, Redis y observabilidad</title>
+  <style>
+    :root{color-scheme:dark;--bg:#071018;--panel:#0d1c28;--panel2:#122738;--line:#28465d;--text:#edf8ff;--muted:#a5bac9;--cyan:#36d9e8;--green:#8cec72;--amber:#ffc85a;--red:#ff7d85}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 84% 0,rgba(54,217,232,.14),transparent 30rem),var(--bg);color:var(--text);font:16px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    .layout{display:grid;grid-template-columns:260px minmax(0,920px);gap:44px;max-width:1260px;margin:auto;padding:40px 28px 80px}nav{position:sticky;top:24px;align-self:start;background:rgba(13,28,40,.92);border:1px solid var(--line);border-radius:18px;padding:22px}nav strong{display:block;color:var(--cyan);letter-spacing:.1em;font-size:.78rem;text-transform:uppercase;margin-bottom:12px}nav a{display:block;color:var(--muted);text-decoration:none;padding:5px 0}nav a:hover{color:var(--text)}main{min-width:0}.hero{padding:26px 0 38px}.eyebrow{color:var(--cyan);letter-spacing:.12em;text-transform:uppercase;font-size:.78rem;font-weight:800}h1{font-size:clamp(2.6rem,7vw,5.1rem);line-height:.96;margin:18px 0 22px;letter-spacing:-.05em}h1 span{color:var(--green)}h2{font-size:2rem;margin:64px 0 18px;letter-spacing:-.025em}h3{margin-top:0}p,li{color:#d0deea}.lead{font-size:1.22rem;max-width:780px;color:var(--muted)}.pill{display:inline-block;border:1px solid #2d6676;border-radius:999px;padding:4px 11px;color:var(--cyan);margin:14px 8px 0 0;font-size:.84rem}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{background:linear-gradient(145deg,var(--panel),#09151f);border:1px solid var(--line);border-radius:18px;padding:22px}.card p{margin-bottom:0}.number{font-size:1.9rem;font-weight:900;color:var(--green)}code{color:#b9f5ff;background:#051019;border:1px solid #1b3749;border-radius:6px;padding:.12rem .38rem}pre{overflow:auto;background:#050c12;border:1px solid var(--line);border-radius:14px;padding:18px}pre code{border:0;padding:0}table{width:100%;border-collapse:collapse;border:1px solid var(--line)}th,td{text-align:left;vertical-align:top;padding:13px;border-bottom:1px solid var(--line)}th{background:var(--panel2);color:var(--cyan)}td{color:#d0deea}.flow{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:center;margin:26px 0}.node{border:1px solid #34758b;background:var(--panel2);border-radius:13px;padding:13px 7px;text-align:center;font-weight:800;font-size:.86rem}.arrow{text-align:center;color:var(--cyan);font-size:1.3rem}.callout{border-left:3px solid var(--green);background:rgba(140,236,114,.06);padding:14px 18px;border-radius:0 12px 12px 0}.warning{border-color:#6b5522;background:rgba(255,200,90,.06)}.warning h3{color:var(--amber)}.danger{border-color:#713642;background:rgba(255,125,133,.06)}.danger h3{color:var(--red)}.check li::marker{color:var(--green)}footer{margin-top:70px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted)}
+    @media(max-width:900px){.layout{display:block;padding:24px 18px 60px}nav{position:static;margin-bottom:34px}.grid{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}}
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav aria-label="Índice">
+      <strong>Módulo 07</strong>
+      <a href="#problema">1. El problema</a>
+      <a href="#arquitectura">2. Arquitectura async</a>
+      <a href="#redis">3. Redis y polling</a>
+      <a href="#hitl">4. Human-in-the-loop</a>
+      <a href="#observabilidad">5. Observabilidad</a>
+      <a href="#metricas">6. Métricas</a>
+      <a href="#entrega">7. Nuestra entrega</a>
+      <a href="#errores">8. Errores comunes</a>
+      <a href="#glosario">9. Glosario</a>
+    </nav>
+    <main>
+      <header class="hero">
+        <div class="eyebrow">AI Engineering · Guía para principiantes</div>
+        <h1>De agente local<br>a sistema de <span>producción</span></h1>
+        <p class="lead">En esta clase sacamos al agente de un script aislado. Lo exponemos con FastAPI, desacoplamos el trabajo lento mediante Redis, permitimos aprobación humana y observamos cada ejecución con trazas.</p>
+        <span class="pill">FastAPI</span><span class="pill">Redis</span><span class="pill">Worker</span><span class="pill">LangGraph</span><span class="pill">Phoenix</span><span class="pill">HITL</span>
+      </header>
+
+      <section id="problema">
+        <h2>1. ¿Cuál es el problema?</h2>
+        <p>Un agente puede tardar entre varios segundos y minutos. Si FastAPI ejecuta el grafo dentro del mismo request, la conexión queda abierta, aparecen timeouts y el servidor desperdicia capacidad esperando al modelo.</p>
+        <div class="grid">
+          <article class="card danger"><h3>Diseño bloqueante</h3><p><code>POST /process</code> llama al LLM y responde recién al finalizar. El cliente no sabe si sigue vivo y el servidor acumula conexiones largas.</p></article>
+          <article class="card"><h3>Diseño desacoplado</h3><p>La API entrega un ticket en milisegundos. Un worker ejecuta el agente por separado y el cliente consulta el resultado.</p></article>
+        </div>
+        <div class="callout"><strong>Asíncrono no significa instantáneo.</strong> Significa que el servidor puede hacer otro trabajo mientras espera entrada/salida, y que la tarea lenta no ocupa el ciclo de vida del request.</div>
+      </section>
+
+      <section id="arquitectura">
+        <h2>2. Arquitectura asíncrona</h2>
+        <div class="flow" aria-label="Flujo principal">
+          <div class="node">Cliente</div><div class="arrow">→</div><div class="node">FastAPI</div><div class="arrow">→</div><div class="node">Redis</div><div class="arrow">→</div><div class="node">Worker</div>
+        </div>
+        <ol class="check">
+          <li>El cliente envía una consulta.</li>
+          <li>FastAPI valida con Pydantic.</li>
+          <li>La API guarda el estado <code>PENDING</code>.</li>
+          <li>Recién después pone el <code>job_id</code> en la cola.</li>
+          <li>Devuelve HTTP <code>202 Accepted</code>.</li>
+          <li>El worker extrae el identificador con <code>BLPOP</code>.</li>
+          <li>Ejecuta LangGraph y actualiza Redis.</li>
+          <li>El cliente consulta <code>GET /tasks/{id}</code>.</li>
+        </ol>
+        <p>API y worker son procesos diferentes. Así podemos tener varias réplicas web y varios workers sin mezclar sus responsabilidades.</p>
+      </section>
+
+      <section id="redis">
+        <h2>3. Redis: cola, estado y checkpoints</h2>
+        <table>
+          <thead><tr><th>Uso</th><th>Qué guarda</th><th>Por qué importa</th></tr></thead>
+          <tbody>
+            <tr><td>Cola</td><td>Lista de <code>job_id</code></td><td>Desacopla recepción y ejecución.</td></tr>
+            <tr><td>Estado del job</td><td>PENDING, RUNNING, WAITING_APPROVAL, DONE o FAILED</td><td>Hace posible el polling y evita esperas infinitas.</td></tr>
+            <tr><td>Checkpoint</td><td>Estado interno de LangGraph bajo un <code>thread_id</code></td><td>Permite reiniciar procesos y reanudar una pausa.</td></tr>
+          </tbody>
+        </table>
+        <pre><code>POST /tasks
+→ guardar PENDING
+→ RPUSH job_id
+→ devolver 202
+
+Worker
+→ BLPOP job_id
+→ guardar RUNNING
+→ ejecutar grafo
+→ guardar DONE o FAILED</code></pre>
+        <p>Guardar antes de encolar evita una carrera: si el worker fuera muy rápido, nunca recibiría un ID inexistente.</p>
+      </section>
+
+      <section id="hitl">
+        <h2>4. Human-in-the-loop</h2>
+        <p>HITL significa que el agente se detiene antes de una acción crítica y espera una decisión externa. Ejemplos: transferir dinero, borrar datos, emitir un reembolso o enviar una comunicación real.</p>
+        <div class="grid">
+          <article class="card"><div class="number">01</div><h3>Clasificar</h3><p>El Analista determina si hay un efecto costoso o irreversible.</p></article>
+          <article class="card"><div class="number">02</div><h3>Interrumpir</h3><p><code>interrupt()</code> pausa el nodo y el checkpointer conserva el hilo.</p></article>
+          <article class="card"><div class="number">03</div><h3>Aprobar</h3><p>Una persona envía su decisión al endpoint de aprobación.</p></article>
+          <article class="card"><div class="number">04</div><h3>Reanudar</h3><p><code>Command(resume=...)</code> continúa el mismo <code>thread_id</code>.</p></article>
+        </div>
+        <div class="callout"><strong>Regla crítica:</strong> al reanudar, LangGraph ejecuta el nodo otra vez desde el principio. Nunca pongas un cobro, borrado o envío antes de <code>interrupt()</code>; el efecto debe vivir en un nodo posterior.</div>
+      </section>
+
+      <section id="observabilidad">
+        <h2>5. Observabilidad: ver dentro de la caja negra</h2>
+        <p>Un HTTP 200 no garantiza una buena respuesta. El agente puede ignorar una herramienta, recuperar contexto irrelevante o inventar una cifra. Las trazas permiten reconstruir qué pasó.</p>
+        <table>
+          <thead><tr><th>Concepto</th><th>Explicación simple</th><th>Ejemplo</th></tr></thead>
+          <tbody>
+            <tr><td>Trace</td><td>El viaje completo de una solicitud.</td><td>Desde que el worker toma el job hasta el informe final.</td></tr>
+            <tr><td>Span</td><td>Una unidad de trabajo dentro de la traza.</td><td>Supervisor, llamada LLM, búsqueda o herramienta.</td></tr>
+            <tr><td>Run</td><td>Una ejecución de un Runnable de LangChain.</td><td>Una invocación concreta de un modelo.</td></tr>
+            <tr><td>Eval</td><td>Una señal de calidad del resultado.</td><td>Fidelidad, relevancia o precisión de contexto.</td></tr>
+          </tbody>
+        </table>
+        <h3>Phoenix vs. LangSmith</h3>
+        <div class="grid">
+          <article class="card"><h3>Arize Phoenix</h3><p>Open source, local-first y basado en OpenTelemetry/OpenInference. Es compatible con distintos frameworks y puede mantener las trazas en tu infraestructura.</p></article>
+          <article class="card"><h3>LangSmith</h3><p>Integración natural con LangChain/LangGraph, debugging de prompts y creación de datasets a partir de ejecuciones.</p></article>
+        </div>
+        <p>Esta entrega usa Phoenix local. El worker crea un span raíz por job y la instrumentación automática agrega las llamadas de LangChain y OpenAI.</p>
+      </section>
+
+      <section id="metricas">
+        <h2>6. Latencia, tokens y costos</h2>
+        <p>El promedio puede esconder usuarios con una experiencia muy mala. Por eso observamos percentiles.</p>
+        <div class="grid">
+          <article class="card"><h3>p50</h3><p>La mediana: la mitad de las ejecuciones fue más rápida y la otra mitad más lenta.</p></article>
+          <article class="card"><h3>p95</h3><p>El 95% terminó antes de ese valor; el 5% más lento quedó por encima.</p></article>
+          <article class="card"><h3>Tokens</h3><p>Entrada y salida consumidas por cada invocación del modelo.</p></article>
+          <article class="card"><h3>Costo</h3><p>La plataforma lo estima usando modelo y tokens observados. No existe en una simulación sin LLM.</p></article>
+        </div>
+        <p>La prueba de carga envía cinco tareas con <code>asyncio.gather</code>. Phoenix muestra el costo por ejecución y la latencia; el script también calcula un p95 HTTP local para contrastar.</p>
+      </section>
+
+      <section id="entrega">
+        <h2>7. Qué construimos</h2>
+        <ol class="check">
+          <li><code>POST /tasks</code> crea y encola sin ejecutar el agente.</li>
+          <li><code>GET /tasks/{id}</code> permite polling.</li>
+          <li><code>POST /tasks/{id}/approve</code> reanuda un checkpoint.</li>
+          <li>El Supervisor delega en Investigador, Analista, Aprobación y Síntesis.</li>
+          <li>Redis persiste tanto el job como el estado de LangGraph.</li>
+          <li>El worker convierte excepciones en <code>FAILED</code>.</li>
+          <li>Phoenix recibe trazas y spans.</li>
+          <li>Docker Compose levanta Redis, Phoenix, API y worker.</li>
+          <li>Un modo simulado permite probar sin tokens; OpenAI produce la evidencia real.</li>
+        </ol>
+      </section>
+
+      <section id="errores">
+        <h2>8. Errores comunes</h2>
+        <div class="grid">
+          <article class="card warning"><h3>LLM dentro del endpoint</h3><p>Convierte un request corto en una conexión larga y frágil.</p></article>
+          <article class="card warning"><h3>Encolar antes de guardar</h3><p>El worker podría leer un ID cuyo registro aún no existe.</p></article>
+          <article class="card warning"><h3>Excepción sin FAILED</h3><p>El usuario seguiría consultando para siempre un job RUNNING.</p></article>
+          <article class="card warning"><h3>Efecto antes del interrupt</h3><p>Podría repetirse al reanudar el nodo.</p></article>
+          <article class="card warning"><h3>Solo mirar promedios</h3><p>Oculta las ejecuciones lentas; observá p95 y p99.</p></article>
+          <article class="card warning"><h3>Confiar solo en trazas</h3><p>La observabilidad complementa, pero no reemplaza tests y revisión humana.</p></article>
+        </div>
+      </section>
+
+      <section id="glosario">
+        <h2>9. Glosario rápido</h2>
+        <table>
+          <tbody>
+            <tr><th>Event loop</th><td>Mecanismo que coordina tareas asíncronas mientras esperan I/O.</td></tr>
+            <tr><th>Job ID</th><td>Ticket único que identifica una tarea desacoplada.</td></tr>
+            <tr><th>Broker</th><td>Intermediario que almacena y distribuye mensajes; aquí es Redis.</td></tr>
+            <tr><th>Worker</th><td>Proceso que consume tareas y ejecuta el trabajo pesado.</td></tr>
+            <tr><th>Polling</th><td>Consultar periódicamente si una tarea cambió de estado.</td></tr>
+            <tr><th>Checkpoint</th><td>Fotografía persistida del estado de LangGraph.</td></tr>
+            <tr><th>HITL</th><td>Pausa obligatoria para una decisión humana antes de continuar.</td></tr>
+            <tr><th>OpenTelemetry</th><td>Estándar para producir y exportar telemetría.</td></tr>
+            <tr><th>OpenInference</th><td>Convenciones de trazado específicas para aplicaciones de IA.</td></tr>
+          </tbody>
+        </table>
+      </section>
+      <footer>Resumen de estudio · Pre-entrega 7 · AI Engineering</footer>
+    </main>
+  </div>
+</body>
+</html>
