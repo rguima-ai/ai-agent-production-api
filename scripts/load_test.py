@@ -30,7 +30,13 @@ def percentile_95(values: list[float]) -> float:
     return ordered[rank - 1]
 
 
-async def submit_and_wait(client: httpx.AsyncClient, query: str) -> dict[str, Any]:
+async def submit_and_wait(
+    client: httpx.AsyncClient,
+    query: str,
+    *,
+    timeout_seconds: float = 180.0,
+    poll_interval: float = 0.25,
+) -> dict[str, Any]:
     started = perf_counter()
     response = await client.post("/tasks", json={"query": query, "force_critical": False})
     response.raise_for_status()
@@ -46,13 +52,23 @@ async def submit_and_wait(client: httpx.AsyncClient, query: str) -> dict[str, An
                 "status": payload["status"],
                 "latency_seconds": round(perf_counter() - started, 4),
             }
-        await asyncio.sleep(0.25)
+        if perf_counter() - started > timeout_seconds:
+            # Un worker caído no debe colgar la prueba para siempre.
+            return {
+                "job_id": job_id,
+                "status": f"TIMEOUT({payload['status']})",
+                "latency_seconds": round(perf_counter() - started, 4),
+            }
+        await asyncio.sleep(poll_interval)
 
 
-async def run(base_url: str, output: Path) -> None:
+async def run(base_url: str, output: Path, timeout_seconds: float) -> None:
     async with httpx.AsyncClient(base_url=base_url, timeout=120) as client:
         results = await asyncio.gather(
-            *(submit_and_wait(client, query) for query in QUERIES)
+            *(
+                submit_and_wait(client, query, timeout_seconds=timeout_seconds)
+                for query in QUERIES
+            )
         )
     latencies = [float(item["latency_seconds"]) for item in results]
     report = {
@@ -78,5 +94,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output", type=Path, default=Path("reports/load_test_results.json")
     )
+    parser.add_argument("--timeout", type=float, default=180.0)
     arguments = parser.parse_args()
-    asyncio.run(run(arguments.base_url, arguments.output))
+    asyncio.run(run(arguments.base_url, arguments.output, arguments.timeout))

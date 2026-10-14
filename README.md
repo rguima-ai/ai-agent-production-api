@@ -145,6 +145,12 @@ cp .env.example .env
 docker compose up --build
 ```
 
+`.env` es opcional para Compose (`required: false`, Docker Compose 2.24 o superior): sin él, el
+stack arranca en modo simulado. Para el modo OpenAI es obligatorio.
+
+> **Estado de verificación:** el stack Docker todavía no se ejecutó en la máquina de desarrollo
+> porque Docker no está instalado allí. `docker-compose.yml` está validado solo de forma estática.
+
 Servicios:
 
 - API y Swagger: <http://localhost:8000/docs>
@@ -210,7 +216,8 @@ Con el stack levantado:
 python scripts/load_test.py
 ```
 
-El script usa `asyncio.gather`, espera los cinco resultados y crea
+El script usa `asyncio.gather`, espera los cinco resultados (con `--timeout`, 180 s por defecto,
+para no quedar colgado si el worker no está corriendo) y crea
 `reports/load_test_results.json`. Su p95 HTTP local sirve como contraste; la métrica que pide la
 rúbrica debe capturarse desde Phoenix.
 
@@ -271,6 +278,9 @@ Las pruebas usan `fakeredis` e `InMemorySaver`; no consumen tokens y no requiere
 
 - El request HTTP nunca invoca al LLM.
 - Un fallo del agente actualiza el job a `FAILED`.
+- El worker reclama el job con una transición atómica `PENDING → RUNNING` (`WATCH/MULTI`): un ID
+  duplicado en la cola o un segundo worker nunca ejecutan ni reanudan el grafo dos veces.
+- Un `job_id` vencido por TTL o inexistente se descarta con un warning; no detiene al worker.
 - La decisión HITL se guarda y reencola atómicamente mediante `WATCH/MULTI`.
 - Solo se aprueban jobs en `WAITING_APPROVAL`; el resto recibe HTTP `409`.
 - Los jobs tienen TTL configurable para controlar el crecimiento de Redis.
@@ -283,6 +293,10 @@ Las pruebas usan `fakeredis` e `InMemorySaver`; no consumen tokens y no requiere
 - La cola basada en Redis List es apropiada para esta pre-entrega. Un sistema crítico debería usar
   Redis Streams, consumer groups o una cola como Celery/ARQ para acknowledgements y reentrega si
   un worker muere después de `BLPOP`.
+- Si el proceso worker muere o se cancela (`CancelledError`, `docker compose down`) mientras un job
+  está en `RUNNING`, ese job queda en `RUNNING` hasta su TTL: la Redis List no tiene
+  acknowledgements. La evolución natural es Redis Streams con `XREADGROUP` + `XAUTOCLAIM`, o un
+  patrón `BLMOVE` a una lista de procesamiento con un reaper.
 - La API no incluye autenticación; el endpoint de aprobación debe protegerse antes de producción.
 - Las capturas dependen de una ejecución real y no pueden generarse honestamente sin credenciales.
 - Redis y Phoenix usan imágenes `latest`/minor en la demo; producción debería fijar imágenes por

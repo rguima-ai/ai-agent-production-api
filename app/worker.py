@@ -39,9 +39,9 @@ class TaskWorker:
         self.settings = settings
 
     async def process_job(self, job_id: str) -> None:
-        record = await self.repository.require(job_id)
-        if record.status is not JobStatus.PENDING:
-            logger.warning("Job %s ignorado porque está en %s", job_id, record.status)
+        record = await self.repository.claim(job_id)
+        if record is None:
+            logger.warning("Job %s ignorado: no existe, venció o no está PENDING", job_id)
             return
 
         with self.tracer.start_as_current_span("agent.job") as span:
@@ -54,7 +54,6 @@ class TaskWorker:
                 },
             )
             try:
-                await self.repository.update(job_id, status=JobStatus.RUNNING, error=None)
                 config: RunnableConfig = {
                     "configurable": {"thread_id": job_id},
                     "recursion_limit": self.settings.max_graph_steps,
@@ -119,8 +118,15 @@ class TaskWorker:
             job_id = await self.repository.dequeue(
                 self.settings.worker_poll_timeout_seconds
             )
-            if job_id is not None:
+            if job_id is None:
+                continue
+            try:
                 await self.process_job(job_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Ej.: Redis cae mientras se persiste FAILED. El loop sigue vivo.
+                logger.exception("Error no recuperado procesando el job %s", job_id)
 
 
 async def main() -> None:

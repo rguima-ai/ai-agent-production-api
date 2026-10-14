@@ -62,11 +62,13 @@ def create_app(
             job_key_prefix=resolved.job_key_prefix,
             ttl_seconds=resolved.job_ttl_seconds,
         )
-        await repository.ping()
-        app.state.repository = repository
-        configure_observability(resolved)
-        yield
-        await client.aclose()
+        try:
+            await repository.ping()
+            app.state.repository = repository
+            configure_observability(resolved)
+            yield
+        finally:
+            await client.aclose()
 
     application = FastAPI(
         title="Pre-entrega 7 · API multi-agente",

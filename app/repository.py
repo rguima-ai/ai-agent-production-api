@@ -87,6 +87,39 @@ class RedisJobRepository:
             return job_id.decode("utf-8")
         return str(job_id)
 
+    async def claim(self, job_id: str, *, retries: int = 3) -> JobRecord | None:
+        """Transiciona PENDING -> RUNNING de forma atómica.
+
+        Devuelve None si el job no existe o ya no está PENDING, para que un ID
+        duplicado en la cola o un segundo worker nunca ejecuten el grafo dos veces.
+        """
+
+        key = self._key(job_id)
+        for _ in range(retries):
+            async with self.redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    if raw is None:
+                        return None
+                    current = JobRecord.model_validate_json(raw)
+                    if current.status is not JobStatus.PENDING:
+                        return None
+                    claimed = current.model_copy(
+                        update={
+                            "status": JobStatus.RUNNING,
+                            "error": None,
+                            "updated_at": datetime.now(UTC),
+                        }
+                    )
+                    pipe.multi()  # type: ignore[no-untyped-call]
+                    pipe.set(key, claimed.model_dump_json(), ex=self.ttl_seconds)
+                    await pipe.execute()
+                    return claimed
+                except WatchError:
+                    continue
+        return None
+
     async def submit_approval(
         self,
         job_id: str,

@@ -10,3 +10,8 @@ htmlcov/
 .DS_Store
 *.log
 reports/load_test_results.json
+.env.*
+!.env.example
+reports/
+*.db
+*.sqlite3
