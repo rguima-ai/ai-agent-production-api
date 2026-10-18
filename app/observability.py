@@ -23,15 +23,19 @@ def configure_observability(settings: Settings) -> Tracer:
 
     if not _configured:
         try:
+            from openinference.instrumentation.langchain import LangChainInstrumentor
             from phoenix.otel import register
 
-            register(
+            tracer_provider = register(
                 project_name=settings.phoenix_project_name,
                 endpoint=settings.phoenix_collector_endpoint,
                 protocol="http/protobuf",
-                auto_instrument=True,
+                auto_instrument=False,
                 batch=True,
             )
+            # Solo LangChain: su span ChatOpenAI ya trae modelo y tokens. Activar también
+            # OpenAIInstrumentor crea un segundo span LLM por llamada y Phoenix duplica el costo.
+            LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
             _configured = True
             logger.info(
                 "Observabilidad Phoenix activa en %s",

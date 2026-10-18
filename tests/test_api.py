@@ -76,3 +76,22 @@ async def test_approve_only_accepts_waiting_job(
 
     assert response.status_code == 409
     assert JobStatus.PENDING.value in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_api_does_not_export_polling_traces_to_phoenix(
+    redis_client: Redis,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered: list[object] = []
+    monkeypatch.setattr("phoenix.otel.register", lambda **kwargs: registered.append(kwargs))
+    monkeypatch.setattr("app.observability._configured", False)
+    enabled = settings.model_copy(update={"observability_enabled": True})
+    app = create_app(enabled, redis_factory=cast(RedisFactory, lambda url: redis_client))
+
+    async with api_client(app) as client:
+        assert (await client.get("/health")).status_code == 200
+
+    # La API no ejecuta LLMs: miles de spans de polling taparían las 5 trazas del agente.
+    assert registered == []

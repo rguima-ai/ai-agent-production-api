@@ -245,8 +245,12 @@ No uses las métricas del modo simulado como evidencia de costo: no consume toke
 
 ## Observabilidad
 
-`phoenix.otel.register(auto_instrument=True)` activa los instrumentadores OpenInference instalados
-para LangChain y OpenAI. El worker también crea un span raíz `agent.job` con:
+El worker llama a `phoenix.otel.register(auto_instrument=False)` y activa solo
+`LangChainInstrumentor`. El span `ChatOpenAI` de LangChain ya incluye modelo y tokens; activar
+también `OpenAIInstrumentor` (que sigue instalado) generaba un segundo span LLM por cada llamada
+y Phoenix sumaba el costo dos veces. La API no exporta a Phoenix: no ejecuta LLMs y cada
+`GET /tasks/{id}` del polling creaba una traza que tapaba las del agente y distorsionaba la p95.
+El worker también crea un span raíz `agent.job` con:
 
 - `job.id`
 - `job.agent_mode`

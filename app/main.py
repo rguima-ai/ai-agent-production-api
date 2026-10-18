@@ -11,7 +11,6 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
-from app.observability import configure_observability
 from app.repository import (
     InvalidJobTransitionError,
     JobNotFoundError,
@@ -65,7 +64,7 @@ def create_app(
         try:
             await repository.ping()
             app.state.repository = repository
-            configure_observability(resolved)
+            # Sin Phoenix en la API: no ejecuta LLMs y el polling taparía las trazas del agente.
             yield
         finally:
             await client.aclose()
