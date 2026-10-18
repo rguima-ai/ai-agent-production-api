@@ -6,12 +6,13 @@ from typing import Any
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from opentelemetry import trace
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.config import Settings
 from app.graph import SimulatedBackend, build_graph
 from app.repository import RedisJobRepository
 from app.schemas import JobRecord, JobStatus
-from app.worker import TaskWorker
+from app.worker import TaskWorker, create_worker_redis
 
 
 @pytest.mark.asyncio
@@ -111,3 +112,41 @@ async def test_duplicate_queue_entries_execute_the_graph_once(
 
     assert graph.calls == 1
     assert (await repository.require("worker-dup")).status is JobStatus.DONE
+
+
+def test_worker_redis_socket_timeout_exceeds_blpop_wait(settings: Settings) -> None:
+    # redis-py 8 usa socket_timeout=5 s por defecto: con BLPOP de 5 s cortaba la
+    # lectura con TimeoutError y mataba al worker cuando la cola estaba vacía.
+    client = create_worker_redis(settings.model_copy(update={"worker_poll_timeout_seconds": 5}))
+    socket_timeout = client.connection_pool.connection_kwargs["socket_timeout"]
+
+    assert socket_timeout > 5
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_survives_transient_redis_errors(
+    repository: RedisJobRepository,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def flaky_dequeue(timeout_seconds: int) -> str | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RedisTimeoutError("Timeout reading from redis:6379")
+        raise asyncio.CancelledError
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(repository, "dequeue", flaky_dequeue)
+    monkeypatch.setattr("app.worker.asyncio.sleep", no_sleep)
+    graph = build_graph(SimulatedBackend(), checkpointer=InMemorySaver())
+    worker = TaskWorker(repository, graph, trace.get_tracer("test"), settings)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker.run_forever()
+
+    assert calls == 2

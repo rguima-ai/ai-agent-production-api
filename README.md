@@ -148,8 +148,11 @@ docker compose up --build
 `.env` es opcional para Compose (`required: false`, Docker Compose 2.24 o superior): sin él, el
 stack arranca en modo simulado. Para el modo OpenAI es obligatorio.
 
-> **Estado de verificación:** el stack Docker todavía no se ejecutó en la máquina de desarrollo
-> porque Docker no está instalado allí. `docker-compose.yml` está validado solo de forma estática.
+> **Estado de verificación (modo simulado):** el stack completo se ejecutó con Docker 29.8 /
+> Compose v5.6 en macOS Apple Silicon. Se comprobaron `/health`, Swagger, una tarea normal, una
+> crítica aprobada y otra rechazada, el 409 ante una doble aprobación, el 404, cinco solicitudes
+> concurrentes en `DONE` y la recepción de spans `agent.job` en Phoenix. La corrida con
+> `AGENT_MODE=openai` (costos y capturas) sigue pendiente.
 
 Servicios:
 
@@ -281,6 +284,9 @@ Las pruebas usan `fakeredis` e `InMemorySaver`; no consumen tokens y no requiere
 - El worker reclama el job con una transición atómica `PENDING → RUNNING` (`WATCH/MULTI`): un ID
   duplicado en la cola o un segundo worker nunca ejecutan ni reanudan el grafo dos veces.
 - Un `job_id` vencido por TTL o inexistente se descarta con un warning; no detiene al worker.
+- redis-py 8 aplica `socket_timeout=5` s por defecto. El cliente del worker usa
+  `WORKER_POLL_TIMEOUT_SECONDS + 5` para que `BLPOP` no se corte del lado del cliente, y un error
+  transitorio de conexión con Redis se reintenta en lugar de terminar el proceso.
 - La decisión HITL se guarda y reencola atómicamente mediante `WATCH/MULTI`.
 - Solo se aprueban jobs en `WAITING_APPROVAL`; el resto recibe HTTP `409`.
 - Los jobs tienen TTL configurable para controlar el crecimiento de Redis.

@@ -12,6 +12,8 @@ from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 from langgraph.types import Command
 from opentelemetry.trace import Status, StatusCode, Tracer
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.config import Settings, get_settings
 from app.graph import ProductionState, build_graph, create_backend
@@ -115,9 +117,15 @@ class TaskWorker:
     async def run_forever(self) -> None:
         logger.info("Worker iniciado; esperando jobs en %s", self.repository.queue_name)
         while True:
-            job_id = await self.repository.dequeue(
-                self.settings.worker_poll_timeout_seconds
-            )
+            try:
+                job_id = await self.repository.dequeue(
+                    self.settings.worker_poll_timeout_seconds
+                )
+            except (RedisConnectionError, RedisTimeoutError):
+                # Redis reiniciando o red inestable: reintentar en vez de morir.
+                logger.warning("Redis no disponible al esperar jobs; reintento en 1 s")
+                await asyncio.sleep(1)
+                continue
             if job_id is None:
                 continue
             try:
@@ -129,11 +137,25 @@ class TaskWorker:
                 logger.exception("Error no recuperado procesando el job %s", job_id)
 
 
+def create_worker_redis(settings: Settings) -> Redis:
+    """Cliente cuyo socket_timeout supera la espera de BLPOP.
+
+    redis-py 8 usa socket_timeout=5 s por defecto; un BLPOP de la misma duración
+    se cortaría del lado del cliente antes de que Redis responda.
+    """
+
+    return Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_timeout=settings.worker_poll_timeout_seconds + 5,
+    )
+
+
 async def main() -> None:
     settings = get_settings()
     settings.validate_runtime()
     tracer = configure_observability(settings)
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    redis = create_worker_redis(settings)
     repository = RedisJobRepository(
         redis,
         queue_name=settings.queue_name,
