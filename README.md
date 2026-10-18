@@ -5,9 +5,9 @@ el trabajo pesado dentro del request HTTP. FastAPI registra la tarea en Redis y 
 `job_id`; un worker independiente procesa el grafo, persiste checkpoints, exporta trazas a Arize
 Phoenix y pausa las tareas críticas hasta recibir aprobación humana.
 
-> **Estado de la evidencia:** el código, los tests y la automatización están completos. Las tres
-> capturas reales del dashboard requieren una corrida con una API key propia y deben agregarse en
-> `screenshots/` antes de entregar. No se incluyen capturas ni costos inventados.
+> **Estado de la evidencia:** completa. El 18/10/2026 se ejecutaron cinco tareas concurrentes con
+> `AGENT_MODE=openai` (`gpt-4.1-mini`) y las capturas reales de Phoenix están en `screenshots/`.
+> Ver [Evidencia de la corrida real](#evidencia-de-la-corrida-real).
 
 ## Arquitectura
 
@@ -152,7 +152,7 @@ stack arranca en modo simulado. Para el modo OpenAI es obligatorio.
 > Compose v5.6 en macOS Apple Silicon. Se comprobaron `/health`, Swagger, una tarea normal, una
 > crítica aprobada y otra rechazada, el 409 ante una doble aprobación, el 404, cinco solicitudes
 > concurrentes en `DONE` y la recepción de spans `agent.job` en Phoenix. La corrida con
-> `AGENT_MODE=openai` (costos y capturas) sigue pendiente.
+> `AGENT_MODE=openai` también se ejecutó; ver la sección de evidencia.
 
 Servicios:
 
@@ -224,7 +224,36 @@ para no quedar colgado si el worker no está corriendo) y crea
 `reports/load_test_results.json`. Su p95 HTTP local sirve como contraste; la métrica que pide la
 rúbrica debe capturarse desde Phoenix.
 
-## Evidencia para entregar
+## Evidencia de la corrida real
+
+Corrida del 18/10/2026: `python scripts/load_test.py` contra el stack Docker con
+`AGENT_MODE=openai`. Los valores salen de Phoenix (proyecto `pre-entrega-7`), no de estimaciones.
+
+| Métrica | Valor |
+|---|---|
+| Ejecuciones | 5/5 en `DONE`, 0 spans con error |
+| Llamadas al modelo | 15 spans `ChatOpenAI` (3 especialistas × 5), `gpt-4.1-mini-2025-04-14` |
+| Tokens | 10.905 (6.877 prompt + 4.028 completion); por ejecución, entre 1.849 y 2.378 |
+| Costo total estimado por Phoenix | USD 0,0092 (0,0028 prompt + 0,0064 completion), ≈ USD 0,0018 por ejecución |
+| Latencia del agente (span `agent.job`) | p50 7,55 s · p95 **9,57 s** · p99 9,82 s · máx. 9,88 s |
+| p95 HTTP local del script | 38,67 s (incluye la espera en cola: un solo worker procesa de a un job) |
+
+| Captura | Contenido |
+|---|---|
+| [`01-trace-completa.png`](screenshots/01-trace-completa.png) | Árbol `agent.job` → `LangGraph` → Supervisor ↔ Investigador / Analista / Aprobación / Síntesis, con los tres `ChatOpenAI` y sus tokens |
+| [`02-costos-por-ejecucion.png`](screenshots/02-costos-por-ejecucion.png) | Las cinco trazas con latencia, tokens y costo por ejecución |
+| [`02b-costo-total-metrics.png`](screenshots/02b-costo-total-metrics.png) | Costo de la corrida separado en prompt/completion (pestaña Metrics) |
+| [`03-latencia-p95.png`](screenshots/03-latencia-p95.png) | Percentiles de latencia de la corrida, con p95 = 9,57 s |
+
+La interfaz de Phoenix muestra los importes menores a un centavo como `<$0.01`; el valor exacto
+de la tabla anterior se obtuvo de la API GraphQL de Phoenix (`costSummary`) y coincide con el
+precio publicado de `gpt-4.1-mini` (USD 0,40 / 1,60 por millón de tokens de entrada / salida).
+
+Las capturas se tomaron con Chrome headless sobre el Phoenix local y se revisaron: no contienen
+API keys ni datos personales. Las trazas del modo simulado quedaron en otro proyecto
+(`pre-entrega-7-simulado`) para no mezclarse con esta evidencia.
+
+### Cómo reproducir la evidencia
 
 Para producir evidencia real:
 
@@ -308,7 +337,8 @@ Las pruebas usan `fakeredis` e `InMemorySaver`; no consumen tokens y no requiere
   acknowledgements. La evolución natural es Redis Streams con `XREADGROUP` + `XAUTOCLAIM`, o un
   patrón `BLMOVE` a una lista de procesamiento con un reaper.
 - La API no incluye autenticación; el endpoint de aprobación debe protegerse antes de producción.
-- Las capturas dependen de una ejecución real y no pueden generarse honestamente sin credenciales.
+- La API procesa los jobs con un solo worker: con cinco jobs concurrentes, el último espera en la
+  cola. Se escala con `docker compose up --scale worker=3`; el claim atómico evita duplicados.
 - Redis y Phoenix usan imágenes `latest`/minor en la demo; producción debería fijar imágenes por
   digest después de una revisión de seguridad.
 

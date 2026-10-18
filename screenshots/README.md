@@ -1,11 +1,15 @@
-# Evidencia pendiente de la corrida real
+# Evidencia de la corrida real
 
-Esta carpeta no contiene capturas inventadas. Para completar la evidencia evaluada, ejecutá el
-stack con `AGENT_MODE=openai`, enviá las cinco solicitudes concurrentes y agregá:
+Capturas reales de Arize Phoenix (proyecto `pre-entrega-7`) tomadas el 18/10/2026 después de
+ejecutar cinco tareas concurrentes con `AGENT_MODE=openai` (`gpt-4.1-mini`).
 
-1. `01-trace-completa.png`: una traza expandida con spans de Supervisor y especialistas.
-2. `02-costos-por-ejecucion.png`: vista de costos de las cinco ejecuciones.
-3. `03-latencia-p95.png`: métrica de latencia p95 filtrada por el proyecto `pre-entrega-7`.
+1. `01-trace-completa.png`: traza expandida de una ejecución, con Supervisor, especialistas y
+   llamadas `ChatOpenAI`.
+2. `02-costos-por-ejecucion.png`: las cinco ejecuciones con latencia, tokens y costo.
+3. `02b-costo-total-metrics.png`: costo total de la corrida separado en prompt y completion.
+4. `03-latencia-p95.png`: percentiles de latencia; p95 = 9,57 s.
 
-Las instrucciones exactas están en la sección **Evidencia para entregar** del README principal.
-No agregues una API key ni datos sensibles a las capturas.
+Phoenix muestra los importes menores a un centavo como `<$0.01`. Los valores exactos (USD 0,0092
+en total) figuran en la sección **Evidencia de la corrida real** del README principal.
+
+Ninguna captura contiene API keys ni datos personales.
